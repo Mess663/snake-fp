@@ -1,8 +1,33 @@
-#app {
-  font-family: Avenir, Helvetica, Arial, sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  text-align: center;
-  color: #2c3e50;
-  margin-top: 60px;
+#root {
+    padding-top: 1px;
+    box-sizing: border-box;
+}
+
+.game {
+    width: 1200px;
+    height: 800px;
+    margin: 20px 0 0 20px;
+    border: 10px solid lightgray;
+    box-sizing: border-box;
+    position: relative;
+
+    .snake-block {
+        width: 20px;
+        height: 20px;
+        background-color: #222;
+        position: absolute;
+        transition: all .1;
+
+        &:first-child {
+            background-color: red;
+        }
+    }
+
+    .apple {
+        position: absolute;
+        width: 20px;
+        height: 20px;
+        border-radius: 100%;
+        background-color: green;
+    }
 }

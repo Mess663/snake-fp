@@ -3,7 +3,9 @@ import './style.less';
 
 import * as RF from 'ramda-fantasy';
 import {
-    clone, forEach, last, map, pipe, range, values,
+    anyPass,
+    both,
+    clone, curry, curryN, defaultTo, equals, forEach, includes, last, map, not, partialRight, pipe, range, values,
 } from 'ramda';
 import { getRandom } from './tools';
 import { KeyBoardCode } from './difinition';
@@ -38,14 +40,12 @@ const moveDom = (x: number, y: number, dom: HTMLDivElement): HTMLDivElement => {
 
 const initDom = (x: number, y: number, dom: HTMLDivElement) => moveDom(x, y, dom);
 
-const initSnake = (gameDom: HTMLDivElement | null) => RF.IO(() => {
-    if (!gameDom) return 0;
-
+const initSnake = (gameDom: HTMLDivElement, initBlockNum: number) => RF.IO(() => {
     const blocks = pipe(
         range(0),
         map((i) => RF.IO(() => initDom(0, i, createSnakeBlock()))),
         forEach((io) => gameDom.appendChild(io.runIO())),
-    )(INIT_BLOCK_NUM);
+    )(initBlockNum);
 
     return blocks.length;
 });
@@ -98,37 +98,43 @@ const clearAppleIO = (gameDom: HTMLDivElement) => RF.IO(() => {
     gameDom.querySelectorAll(`.${APPLE_CLASS}`).forEach((o) => o.remove());
 });
 
-const hasSameCode = (arr1: unknown[], arr2: unknown[]) => arr2.every((o) => arr1.includes(o));
-const isSamePos = (pos1: Position, pos2: Position) => pos1[0] === pos2[0] && pos1[1] === pos2[1];
+const hasSameCode = curryN(3, (arr1: unknown[], ...arr2: unknown[]) => arr2.every((o) => arr1.includes(o)));
+const isSamePos = curry((pos1: Position, pos2: Position) => pos1[0] === pos2[0] && pos1[1] === pos2[1]);
+const keyCodeIncludes = partialRight(includes, [values(KeyBoardCode)]);
+const inContrastToLast = (lastKey: string) => both(hasSameCode(VerticalCode, lastKey), hasSameCode(HorizonalCode, lastKey));
 
 const initGameIO = (gameDom: HTMLDivElement) => RF.IO(() => {
-    const len = initSnake(gameDom).runIO();
-    const snakePosArr = range(0, len).map<Position>((i) => [0, i]);
     const appleCreator = initAppleIO(gameDom);
 
     let timer: number;
-    let lastKeyCode: number;
-    let blocksPosArr: Position[] = snakePosArr; // 蛇的位置
+    let lastKeyCode: string;
+    let snakePosArr = initSnake(gameDom, INIT_BLOCK_NUM)
+        .map(range(0))
+        .map(map((i) => [0, i]))
+        .runIO() as Position[]; // 蛇的位置
     let applePos = appleCreator.runIO();
 
-    blocksPosArr = autoMoveIO(KeyBoardCode.down, blocksPosArr).runIO();
+    snakePosArr = autoMoveIO(KeyBoardCode.down, snakePosArr).runIO();
 
     window.addEventListener('keydown', (e: any) => {
-        if (!values(KeyBoardCode).includes(e.code)) return;
-        if (lastKeyCode === e.code) return;
-        const codes = [lastKeyCode, e.code];
-        if (hasSameCode(VerticalCode, codes) || hasSameCode(HorizonalCode, codes)) return;
+        const notPass = anyPass<string>([
+            pipe(keyCodeIncludes, not),
+            equals(lastKeyCode),
+            inContrastToLast(lastKeyCode),
+        ])(e.code);
+
+        if (notPass) return;
 
         lastKeyCode = e.code;
 
         clearInterval(timer);
         timer = setInterval(() => {
-            blocksPosArr = autoMoveIO(e.code, blocksPosArr).runIO();
+            const isCrashApple = pipe(last, defaultTo([-1, -1]), isSamePos(applePos));
+            snakePosArr = autoMoveIO(e.code, snakePosArr).runIO();
 
-            const headPos = last(blocksPosArr);
-            if (headPos && isSamePos(headPos, applePos)) {
+            if (isCrashApple(snakePosArr)) {
                 clearAppleIO(gameDom).runIO();
-                addSnakeTailIO(blocksPosArr, gameDom).runIO();
+                addSnakeTailIO(snakePosArr, gameDom).runIO();
                 applePos = appleCreator.runIO();
             }
         }, MOVE_SPEED);

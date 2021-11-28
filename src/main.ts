@@ -4,9 +4,9 @@ import './style.less';
 import * as RF from 'ramda-fantasy';
 import {
     anyPass,
-    both,
-    clone, curry, curryN, defaultTo, equals, forEach, includes, last, map, not, partialRight, pipe, range, values,
+    clone, curry, curryN, either, equals, forEach, includes, last, map, not, partialRight, pipe, range, slice, values,
 } from 'ramda';
+import * as RX from 'rxjs';
 import { getRandom } from './tools';
 import { KeyBoardCode } from './difinition';
 
@@ -32,11 +32,11 @@ const createApple = () => {
     return $div;
 };
 
-const moveDom = (x: number, y: number, dom: HTMLDivElement): HTMLDivElement => {
+const moveDom = curry((x: number, y: number, dom: HTMLDivElement): HTMLDivElement => {
     dom.style.top = `${y * BLOCK_SIZE}px`;
     dom.style.left = `${x * BLOCK_SIZE}px`;
     return dom;
-};
+});
 
 const initDom = (x: number, y: number, dom: HTMLDivElement) => moveDom(x, y, dom);
 
@@ -71,21 +71,12 @@ const handlePosFromDirection = (x: number, y: number, direct: KeyBoardCode): Pos
     return [x, y];
 };
 
-const autoMoveIO = (direct: KeyBoardCode, posArr: Position[]) => RF.IO(() => {
-    const retPosArr = clone(posArr);
-    document.querySelectorAll<HTMLDivElement>(`.${BLOCK_CLASS}`).forEach((d, i) => {
-        const trackIndex = posArr.length - i;
-        const pos = posArr[trackIndex];
-        if (pos) {
-            moveDom(...pos, d);
-        } else {
-            const newPos = handlePosFromDirection(...posArr[trackIndex - 1], direct);
-            moveDom(...newPos, d);
-            retPosArr.push(newPos);
-        }
-    });
-    return retPosArr;
-});
+const getNewMovePos = (direct: KeyBoardCode, posArr: Position[]) => pipe(
+    clone,
+    (o) => [...o, handlePosFromDirection(...posArr[posArr.length - 1], direct)],
+)(posArr) as Position[];
+
+const getBlockDomsIO = () => new RF.IO(() => document.querySelectorAll<HTMLDivElement>(`.${BLOCK_CLASS}`));
 
 const addSnakeTailIO = (snakePosArr: Position[], gameDom: HTMLDivElement) => RF.IO(() => {
     const snakeLength = gameDom.querySelectorAll<HTMLDivElement>(`.${BLOCK_CLASS}`).length;
@@ -101,43 +92,45 @@ const clearAppleIO = (gameDom: HTMLDivElement) => RF.IO(() => {
 const hasSameCode = curryN(3, (arr1: unknown[], ...arr2: unknown[]) => arr2.every((o) => arr1.includes(o)));
 const isSamePos = curry((pos1: Position, pos2: Position) => pos1[0] === pos2[0] && pos1[1] === pos2[1]);
 const keyCodeIncludes = partialRight(includes, [values(KeyBoardCode)]);
-const inContrastToLast = (lastKey: string) => both(hasSameCode(VerticalCode, lastKey), hasSameCode(HorizonalCode, lastKey));
+const inContrastToLast = (lastKey: string) => either(hasSameCode(VerticalCode, lastKey), hasSameCode(HorizonalCode, lastKey));
+
+const $keyDown = RX.fromEvent(window, 'keydown');
+const $snakeMove = $keyDown.pipe(
+    RX.concatMap((ev: any) => RX.interval(MOVE_SPEED).pipe(
+        RX.map(() => ev.code as KeyBoardCode),
+        RX.takeUntil($keyDown),
+    )),
+    RX.scan(([, lastKey], key) => [lastKey, key], ['', ''] as unknown as KeyBoardCode[]),
+    RX.filter(([lastKey, key]) => anyPass<KeyBoardCode>([
+        pipe(keyCodeIncludes, not),
+        equals(lastKey),
+        inContrastToLast(lastKey),
+    ])(key)),
+    RX.map(([, key]) => key),
+);
 
 const initGameIO = (gameDom: HTMLDivElement) => RF.IO(() => {
     const appleCreator = initAppleIO(gameDom);
 
-    let timer: number;
-    let lastKeyCode: string;
-    let snakePosArr = initSnake(gameDom, INIT_BLOCK_NUM)
+    const initSnakePos = initSnake(gameDom, INIT_BLOCK_NUM)
         .map(range(0))
         .map(map((i) => [0, i]))
-        .runIO() as Position[]; // 蛇的位置
+        .runIO() as Position[];
+    const $move = $snakeMove.pipe(RX.scan((posArr, key) => getNewMovePos(key, posArr), initSnakePos));
+
+    $move.subscribe((posArr) => {
+        const $blockDoms = getBlockDomsIO().runIO();
+        slice(-$blockDoms.length, Infinity, posArr).forEach((pos, i) => moveDom(...pos, $blockDoms[i]));
+    });
+
     let applePos = appleCreator.runIO();
-
-    snakePosArr = autoMoveIO(KeyBoardCode.down, snakePosArr).runIO();
-
-    window.addEventListener('keydown', (e: any) => {
-        const notPass = anyPass<string>([
-            pipe(keyCodeIncludes, not),
-            equals(lastKeyCode),
-            inContrastToLast(lastKeyCode),
-        ])(e.code);
-
-        if (notPass) return;
-
-        lastKeyCode = e.code;
-
-        clearInterval(timer);
-        timer = setInterval(() => {
-            const isCrashApple = pipe(last, defaultTo([-1, -1]), isSamePos(applePos));
-            snakePosArr = autoMoveIO(e.code, snakePosArr).runIO();
-
-            if (isCrashApple(snakePosArr)) {
-                clearAppleIO(gameDom).runIO();
-                addSnakeTailIO(snakePosArr, gameDom).runIO();
-                applePos = appleCreator.runIO();
-            }
-        }, MOVE_SPEED);
+    $move.subscribe((posArr) => {
+        const isCrashApple = pipe(last, isSamePos(applePos));
+        if (isCrashApple(posArr)) {
+            clearAppleIO(gameDom).runIO();
+            addSnakeTailIO(posArr, gameDom).runIO();
+            applePos = appleCreator.runIO();
+        }
     });
 });
 

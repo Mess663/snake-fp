@@ -43,8 +43,8 @@ const initDom = (x: number, y: number, dom: HTMLDivElement) => moveDom(x, y, dom
 const initSnake = (gameDom: HTMLDivElement, initBlockNum: number) => RF.IO(() => {
     const blocks = pipe(
         range(0),
-        map((i) => RF.IO(() => initDom(0, i, createSnakeBlock()))),
-        forEach((io) => gameDom.appendChild(io.runIO())),
+        map((i) => initDom(0, i, createSnakeBlock())),
+        forEach(gameDom.appendChild),
     )(initBlockNum);
 
     return blocks.length;
@@ -53,8 +53,8 @@ const initSnake = (gameDom: HTMLDivElement, initBlockNum: number) => RF.IO(() =>
 const initAppleIO = (gameDom: HTMLDivElement | null) => RF.IO((): Position => {
     if (!gameDom) return [0, 0];
 
-    const x = getRandom(0, gameDom.offsetWidth / BLOCK_SIZE);
-    const y = getRandom(0, gameDom.offsetHeight / BLOCK_SIZE);
+    const x = getRandom(0, gameDom.clientWidth / BLOCK_SIZE);
+    const y = getRandom(0, gameDom.clientHeight / BLOCK_SIZE);
 
     const $apple = initDom(x, y, createApple());
 
@@ -76,10 +76,10 @@ const getNewMovePos = (direct: KeyBoardCode, posArr: Position[]) => pipe(
     (o) => [...o, handlePosFromDirection(...posArr[posArr.length - 1], direct)],
 )(posArr) as Position[];
 
-const getBlockDomsIO = () => new RF.IO(() => document.querySelectorAll<HTMLDivElement>(`.${BLOCK_CLASS}`));
+const getBlockDomsIO = (gameDom: HTMLDivElement) => new RF.IO(() => gameDom.querySelectorAll<HTMLDivElement>(`.${BLOCK_CLASS}`));
 
 const addSnakeTailIO = (snakePosArr: Position[], gameDom: HTMLDivElement) => RF.IO(() => {
-    const snakeLength = gameDom.querySelectorAll<HTMLDivElement>(`.${BLOCK_CLASS}`).length;
+    const snakeLength = getBlockDomsIO(gameDom).runIO().length;
     const tailPos = snakePosArr[snakePosArr.length - snakeLength];
     const tail = initDom(...tailPos, createSnakeBlock());
     gameDom.appendChild(tail);
@@ -97,10 +97,9 @@ const inContrastToLast = (lastKey: string) => either(hasSameCode(VerticalCode, l
 const $keyDown = RX.fromEvent(window, 'keydown');
 const $snakeMove = $keyDown.pipe(
     RX.concatMap((ev: any) => RX.interval(MOVE_SPEED).pipe(
-        RX.map(() => ev.code as KeyBoardCode),
+        RX.scan(([, lastKey]) => [lastKey, ev.code], ['', ''] as unknown as KeyBoardCode[]),
         RX.takeUntil($keyDown),
     )),
-    RX.scan(([, lastKey], key) => [lastKey, key], ['', ''] as unknown as KeyBoardCode[]),
     RX.filter(([lastKey, key]) => anyPass<KeyBoardCode>([
         pipe(keyCodeIncludes, not),
         equals(lastKey),
@@ -119,7 +118,7 @@ const initGameIO = (gameDom: HTMLDivElement) => RF.IO(() => {
     const $move = $snakeMove.pipe(RX.scan((posArr, key) => getNewMovePos(key, posArr), initSnakePos));
 
     $move.subscribe((posArr) => {
-        const $blockDoms = getBlockDomsIO().runIO();
+        const $blockDoms = getBlockDomsIO(gameDom).runIO();
         slice(-$blockDoms.length, Infinity, posArr).forEach((pos, i) => moveDom(...pos, $blockDoms[i]));
     });
 

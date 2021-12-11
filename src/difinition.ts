@@ -5,4 +5,5 @@ export enum KeyBoardCode {
     down = 'ArrowDown',
     left = 'ArrowLeft',
     right = 'ArrowRight',
+    no = ''
 }

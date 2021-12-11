@@ -44,17 +44,17 @@ const initSnake = (gameDom: HTMLDivElement, initBlockNum: number) => RF.IO(() =>
     const blocks = pipe(
         range(0),
         map((i) => initDom(0, i, createSnakeBlock())),
-        forEach(gameDom.appendChild),
+        forEach((dom) => gameDom.appendChild(dom)),
     )(initBlockNum);
 
     return blocks.length;
 });
 
-const initAppleIO = (gameDom: HTMLDivElement | null) => RF.IO((): Position => {
+const createAppleIO = (gameDom: HTMLDivElement) => RF.IO((): Position => {
     if (!gameDom) return [0, 0];
 
-    const x = getRandom(0, gameDom.clientWidth / BLOCK_SIZE);
-    const y = getRandom(0, gameDom.clientHeight / BLOCK_SIZE);
+    const x = getRandom(0, (gameDom.clientWidth - 20) / BLOCK_SIZE);
+    const y = getRandom(0, (gameDom.clientHeight - 20) / BLOCK_SIZE);
 
     const $apple = initDom(x, y, createApple());
 
@@ -63,26 +63,49 @@ const initAppleIO = (gameDom: HTMLDivElement | null) => RF.IO((): Position => {
     return [x, y];
 });
 
-const handlePosFromDirection = (x: number, y: number, direct: KeyBoardCode): Position => {
-    if (direct === KeyBoardCode.down) return [x, y + 1];
-    if (direct === KeyBoardCode.up) return [x, y - 1];
-    if (direct === KeyBoardCode.left) return [x - 1, y];
-    if (direct === KeyBoardCode.right) return [x + 1, y];
-    return [x, y];
-};
+const updateAppleCountIO = (() => {
+    const appleCountDom = document.querySelector('.score-num');
+    return (count: number) => RF.IO(() => {
+        if (appleCountDom) appleCountDom.innerHTML = String(count);
+    });
+})();
 
-const getNewMovePos = (direct: KeyBoardCode, posArr: Position[]) => pipe(
+const handlePosFromDirection = (() => {
+    const gameDom = document.querySelector('.game');
+    if (!gameDom) return () => {};
+    const xEnd = gameDom.clientWidth / BLOCK_SIZE;
+    const yEnd = gameDom.clientHeight / BLOCK_SIZE;
+    const getPos = (x: number, y: number, direct: KeyBoardCode) => {
+        if (direct === KeyBoardCode.down) return [x, y + 1];
+        if (direct === KeyBoardCode.up) return [x, y - 1];
+        if (direct === KeyBoardCode.left) return [x - 1, y];
+        if (direct === KeyBoardCode.right) return [x + 1, y];
+        return [x, y];
+    };
+
+    return (x: number, y: number, direct: KeyBoardCode) => {
+        const newPos = getPos(x, y, direct);
+        if (newPos[0] < 0) newPos[0] = xEnd - 1;
+        else if (newPos[0] >= xEnd) newPos[0] = 0;
+        else if (newPos[1] < 0) newPos[1] = yEnd - 1;
+        else if (newPos[1] >= yEnd) newPos[1] = 0;
+
+        return newPos;
+    };
+})();
+
+const getNewMovePos = (direct: KeyBoardCode, posArr: Position[], snakeLen: number) => pipe(
     clone,
     (o) => [...o, handlePosFromDirection(...posArr[posArr.length - 1], direct)],
+    slice(-snakeLen, Infinity),
 )(posArr) as Position[];
 
 const getBlockDomsIO = (gameDom: HTMLDivElement) => new RF.IO(() => gameDom.querySelectorAll<HTMLDivElement>(`.${BLOCK_CLASS}`));
 
 const addSnakeTailIO = (snakePosArr: Position[], gameDom: HTMLDivElement) => RF.IO(() => {
-    const snakeLength = getBlockDomsIO(gameDom).runIO().length;
-    const tailPos = snakePosArr[snakePosArr.length - snakeLength];
-    const tail = initDom(...tailPos, createSnakeBlock());
-    gameDom.appendChild(tail);
+    const tailPos = snakePosArr[0];
+    const snakeTail = initDom(...tailPos, createSnakeBlock());
+    gameDom.appendChild(snakeTail);
 });
 
 const clearAppleIO = (gameDom: HTMLDivElement) => RF.IO(() => {
@@ -92,45 +115,65 @@ const clearAppleIO = (gameDom: HTMLDivElement) => RF.IO(() => {
 const hasSameCode = curryN(3, (arr1: unknown[], ...arr2: unknown[]) => arr2.every((o) => arr1.includes(o)));
 const isSamePos = curry((pos1: Position, pos2: Position) => pos1[0] === pos2[0] && pos1[1] === pos2[1]);
 const keyCodeIncludes = partialRight(includes, [values(KeyBoardCode)]);
-const inContrastToLast = (lastKey: string) => either(hasSameCode(VerticalCode, lastKey), hasSameCode(HorizonalCode, lastKey));
+const inContrastToLast = (lastKey: KeyBoardCode) => either(hasSameCode(VerticalCode, lastKey), hasSameCode(HorizonalCode, lastKey));
 
-const $keyDown = RX.fromEvent(window, 'keydown');
-const $snakeMove = $keyDown.pipe(
-    RX.concatMap((ev: any) => RX.interval(MOVE_SPEED).pipe(
-        RX.scan(([, lastKey]) => [lastKey, ev.code], ['', ''] as unknown as KeyBoardCode[]),
-        RX.takeUntil($keyDown),
-    )),
-    RX.filter(([lastKey, key]) => anyPass<KeyBoardCode>([
+const $keyDown = RX.fromEvent(window, 'keydown').pipe(
+    RX.map<Event, KeyBoardCode>((ev: any) => ev.code as KeyBoardCode),
+    RX.scan(([, lastCode], code) => [lastCode, code], [KeyBoardCode.no, KeyBoardCode.no]),
+    RX.filter(([lastCode, code]) => !anyPass<KeyBoardCode>([
         pipe(keyCodeIncludes, not),
-        equals(lastKey),
-        inContrastToLast(lastKey),
-    ])(key)),
-    RX.map(([, key]) => key),
+        equals(lastCode),
+        inContrastToLast(lastCode),
+    ])(code)),
+    RX.map(([, code]) => code),
 );
 
-const initGameIO = (gameDom: HTMLDivElement) => RF.IO(() => {
-    const appleCreator = initAppleIO(gameDom);
+const autoMove = (gameDom: HTMLDivElement, snakePos: Position[], applePos: Position, appleCount: number, goingKey = KeyBoardCode.no) => {
+    const $observable = new RX.Observable((sub) => {
+        sub.next(goingKey);
+        $keyDown.subscribe(sub);
+    });
 
-    const initSnakePos = initSnake(gameDom, INIT_BLOCK_NUM)
-        .map(range(0))
-        .map(map((i) => [0, i]))
-        .runIO() as Position[];
-    const $move = $snakeMove.pipe(RX.scan((posArr, key) => getNewMovePos(key, posArr), initSnakePos));
+    const $move = RX.combineLatest([
+        RX.interval(MOVE_SPEED * 0.8 ** appleCount), // 蛇加速
+        appleCount > 0 ? $observable : $keyDown,
+    ]).pipe(
+        RX.map(([, key]) => key as KeyBoardCode),
+        RX.scan<KeyBoardCode, [Position[], KeyBoardCode]>(([posArr], key) => [getNewMovePos(key, posArr, snakePos.length + 1), key], [snakePos, KeyBoardCode.no]),
+    );
 
-    $move.subscribe((posArr) => {
+    // 移动蛇
+    const moveSub = $move.subscribe(([posArr]) => {
         const $blockDoms = getBlockDomsIO(gameDom).runIO();
-        slice(-$blockDoms.length, Infinity, posArr).forEach((pos, i) => moveDom(...pos, $blockDoms[i]));
+        posArr.forEach((pos, i) => moveDom(...pos, $blockDoms[i]));
     });
 
-    let applePos = appleCreator.runIO();
-    $move.subscribe((posArr) => {
-        const isCrashApple = pipe(last, isSamePos(applePos));
-        if (isCrashApple(posArr)) {
-            clearAppleIO(gameDom).runIO();
-            addSnakeTailIO(posArr, gameDom).runIO();
-            applePos = appleCreator.runIO();
-        }
+    // eslint-disable-next-line no-unused-vars
+    const isCrashApple: (_: Position[]) => boolean = pipe(last, isSamePos(applePos));
+
+    // 判断蛇是否碰撞到苹果
+    const crashSub = $move.pipe(
+        RX.filter(([posArr]) => isCrashApple(posArr)),
+    ).subscribe(([posArr, key]) => {
+        clearAppleIO(gameDom).runIO();
+        addSnakeTailIO(posArr, gameDom).runIO();
+        updateAppleCountIO(appleCount).runIO();
+        const newApplePos = createAppleIO(gameDom).runIO();
+
+        moveSub.unsubscribe();
+        crashSub.unsubscribe();
+
+        autoMove(gameDom, posArr, newApplePos, appleCount + 1, key);
     });
+};
+
+const initGameIO = (gameDom: HTMLDivElement) => RF.IO(() => {
+    const initSnakePos = initSnake(gameDom, INIT_BLOCK_NUM)
+        .map((len) => range(0, len - 1))
+        .map<Position[]>(map((i) => [0, i]))
+        .runIO();
+    const appleCreator = createAppleIO(gameDom);
+    autoMove(gameDom, initSnakePos, appleCreator.runIO(), 0);
 });
 
 const __main = () => {

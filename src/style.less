@@ -1,12 +1,20 @@
 #root {
     padding-top: 1px;
     box-sizing: border-box;
+    display: flex;
+    padding: 20px;
+}
+
+.apple-apparence {
+    width: 20px;
+    height: 20px;
+    border-radius: 100%;
+    background-color: green;
 }
 
 .game {
     width: 1200px;
     height: 800px;
-    margin: 20px 0 0 20px;
     border: 10px solid lightgray;
     box-sizing: border-box;
     position: relative;
@@ -25,9 +33,19 @@
 
     .apple {
         position: absolute;
-        width: 20px;
-        height: 20px;
-        border-radius: 100%;
-        background-color: green;
+        .apple-apparence;
+    }
+}
+
+.side {
+    width: 200px;
+    margin-left: 10px;
+
+    .apple {
+        .apple-apparence;
+    }
+    .score {
+        width: 100%;
+        display: flex;
     }
 }
